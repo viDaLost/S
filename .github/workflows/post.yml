@@ -3,11 +3,12 @@ name: Post to Telegram (Image)
 on:
   schedule:
     - cron: "*/15 * * * *"   # каждые 15 минут (UTC)
-  workflow_dispatch: {}       # запуск вручную
+  workflow_dispatch: {}       # запуск вручную из вкладки Actions
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -28,8 +29,9 @@ jobs:
         with:
           node-version: "18"
 
+      # ЗАМЕНЕНО: npm ci -> npm install (lock-файл не требуется)
       - name: Install npm deps
-        run: npm ci
+        run: npm install
 
       - name: Run image sender
         env:
