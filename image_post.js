@@ -1,6 +1,7 @@
-// image_post.js — PNG (тёплый бежевый фон, шоколадный текст), БЕЗ подписи
-// Гарантированное время для Europe/Moscow: (закат UTC) + 2 часа = "закат−1ч" в МСК.
-// Никакого Intl — только UTC-математика, чтобы исключить сюрпризы окружения.
+// image_post.js — PNG (тёплый беж, «шоколадный» текст), БЕЗ подписи.
+// Локальное время считаем по фиксированному сдвигу offset_minutes (для Ставрополья: +180).
+// Формула: local = UTC + offset; "закат − 1ч" = sunsetUTC + (offset_minutes − 60) минут.
+// Никакого Intl — только UTC-математика (стабильно на GitHub Actions).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,7 +13,7 @@ if (!BOT_TOKEN) { console.error('No BOT_TOKEN'); process.exit(1); }
 const ROOT = process.cwd();
 const channels = JSON.parse(fs.readFileSync(path.join(ROOT, 'channels.json'), 'utf8'));
 
-// ШРИФТЫ (кириллица)
+// Шрифты (кириллица)
 registerFont(path.join(ROOT, 'assets/fonts/Manrope-Regular.ttf'), { family: 'Manrope', weight: '400' });
 registerFont(path.join(ROOT, 'assets/fonts/Manrope-Bold.ttf'),    { family: 'Manrope', weight: '700' });
 registerFont(path.join(ROOT, 'assets/fonts/PTSans-Regular.ttf'),  { family: 'PT Sans', weight: '400' });
@@ -46,45 +47,50 @@ function getSunset(dateUTC, lat, lon){
   return fromJulian(Jset); // sunset in UTC (Date)
 }
 
-// ───────── Вспомогательные: "виртуальная Москва" ─────────
-// Возвращает субботу «по Москве»: берём текущий UTC, сдвигаем на +3ч,
-// считаем ближайшую субботу по этому локальному времени, затем возвращаем полдень в UTC.
-function nextSaturdayNoonUTC_MSK(nowUTC){
-  const mskNow = new Date(nowUTC.getTime() + 3*60*60*1000); // UTC→MSK
-  const dow = mskNow.getUTCDay(); // 0..6 (т.к. мы в "виртуальной" зоне используем UTC-геттеры)
-  const addDays = (6 - dow + 7) % 7;
-  const y = mskNow.getUTCFullYear();
-  const m = mskNow.getUTCMonth();
-  const d = mskNow.getUTCDate() + addDays;
-  // Полдень UTC выбран как стабильная точка внутри суток:
-  return new Date(Date.UTC(y, m, d, 12, 0, 0));
+// ───────── Время: вычисляем в «локали по смещению» (offset_minutes) ─────────
+// Находим ближайшую субботу с точки зрения локального смещения (offset),
+// берём полдень той субботы в UTC (стабильная точка внутри суток).
+function nextLocalSaturdayNoonUTC(nowUTC, offsetMinutes){
+  const offsetMs = offsetMinutes*60*1000;
+  const localNow = new Date(nowUTC.getTime() + offsetMs);      // UTC → local
+  const dow = localNow.getUTCDay();                            // 0..6
+  const addDays = (6 - dow + 7) % 7;                           // до субботы
+  const y = localNow.getUTCFullYear();
+  const m = localNow.getUTCMonth();
+  const d = localNow.getUTCDate() + addDays;
+  const localSatNoon = new Date(Date.UTC(y, m, d, 12, 0, 0));  // 12:00 локальных суток
+  return new Date(localSatNoon.getTime() - offsetMs);          // обратно в UTC
 }
 
-// Строгое формирование "HH:MM" для МСК: (закат UTC) + 2ч  → UTC-поля
-function sunsetMinus1HHMM_MSK(lat, lon){
-  const saturdayUTC = nextSaturdayNoonUTC_MSK(new Date());
-  const sunsetUTC = getSunset(saturdayUTC, lat, lon);   // UTC
-  const minus1UTC = new Date(sunsetUTC.getTime() + 2*60*60*1000); // (UTC+3)−1ч = UTC+2
-  const h = minus1UTC.getUTCHours();
-  const m = minus1UTC.getUTCMinutes();
-  const hh = (h < 10 ? '0' : '') + h;
-  const mm = (m < 10 ? '0' : '') + m;
-  return hh + ':' + mm;
+// Формируем "HH:MM" строго через UTC-поля после добавления смещения
+function hhmmFromUTCWithOffset(dateUTC, offsetMinutes){
+  const d = new Date(dateUTC.getTime() + offsetMinutes*60*1000);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
 }
 
-// ───────── Расписание для МСК (окно 15 минут) ─────────
+// Закат субботы − 1 час → HH:MM в локальном времени (offset_minutes)
+function sunsetMinus1HHMM_Local(lat, lon, offsetMinutes){
+  const saturdayUTC = nextLocalSaturdayNoonUTC(new Date(), offsetMinutes);
+  const sunsetUTC   = getSunset(saturdayUTC, lat, lon);
+  const localMinus1 = new Date(sunsetUTC.getTime() + (offsetMinutes - 60)*60*1000);
+  return hhmmFromUTCWithOffset(localMinus1, 0); // уже учли смещение в localMinus1
+}
+
+// ───────── Расписание: окно 15 минут (в локальном смещении) ─────────
 const DOW = { SUN:0, MON:1, TUE:2, WED:3, THU:4, FRI:5, SAT:6 };
-function shouldSendNow_MSK(schedule, lastSentMs){
+function shouldSendNow_Local(schedule, lastSentMs, offsetMinutes){
   const now = new Date();
-  const msk = new Date(now.getTime() + 3*60*60*1000); // виртуальная МСК
-  const localDay = msk.getUTCDay();
-  const hh = msk.getUTCHours(), mm = msk.getUTCMinutes();
+  const local = new Date(now.getTime() + offsetMinutes*60*1000);
+  const localDay = local.getUTCDay();
+  const hh = local.getUTCHours(), mm = local.getUTCMinutes();
 
   const [dayStr, hm] = schedule.split(' ');
   const [th, tm] = hm.split(':').map(Number);
   const target = DOW[dayStr];
 
-  const nowMin = localDay*1440 + hh*60 + mm;
+  const nowMin   = localDay*1440 + hh*60 + mm;
   const schedMin = target*1440 + th*60 + tm;
   let diff = nowMin - schedMin;
   if (diff < 0) diff += 7*1440;
@@ -94,7 +100,7 @@ function shouldSendNow_MSK(schedule, lastSentMs){
   return diff < WINDOW && antiDup;
 }
 
-// ───────── Рендер (тёплый беж, шоколадный текст), без нижней подписи ─────────
+// ───────── Рендер (тёплый беж, «шоколад»), без нижней подписи ─────────
 function renderCard({ hhmm }){
   const W = 1080, H = 1350;
   const canvas = createCanvas(W, H);
@@ -162,17 +168,15 @@ try { cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); } catch { cache =
 // ───────── MAIN ─────────
 (async ()=>{
   for (const rule of channels){
-    const tz = rule.tz || 'Europe/Moscow';
-    if (tz !== 'Europe/Moscow') continue; // поддерживаем только МСК в этом варианте
+    // offset_minutes: локальное смещение в минутах (Ставропольский край = 180)
+    const offset = Number.isFinite(rule.offset_minutes) ? rule.offset_minutes : 180;
 
-    const uid = `${rule.chat_id}::${tz}::${rule.schedule}`;
+    const uid = `${rule.chat_id}::offset${offset}::${rule.schedule}`;
     const last = cache[uid] ? Number(cache[uid]) : 0;
-    if (!shouldSendNow_MSK(rule.schedule, last)) continue;
+    if (!shouldSendNow_Local(rule.schedule, last, offset)) continue;
 
-    const hhmm = sunsetMinus1HHMM_MSK(rule.lat, rule.lon);
-
-    // DEBUG: выводим, что рисуем
-    console.log('DEBUG hhmm =', hhmm);
+    const hhmm = sunsetMinus1HHMM_Local(rule.lat, rule.lon, offset);
+    console.log('DEBUG hhmm(local) =', hhmm, 'offset', offset, 'min');
 
     const png = renderCard({ hhmm });
 
