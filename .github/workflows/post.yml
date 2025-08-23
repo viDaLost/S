@@ -1,9 +1,9 @@
-name: Post to Telegram
+name: Post to Telegram (Image)
 
 on:
   schedule:
     - cron: "*/15 * * * *"   # каждые 15 минут (UTC)
-  workflow_dispatch: {}       # можно запустить вручную из телефона
+  workflow_dispatch: {}       # запуск вручную
 
 jobs:
   run:
@@ -12,7 +12,11 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Кэшируем наш файл антидублей между запусками
+      - name: Install system deps for canvas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
       - name: Restore send cache
         uses: actions/cache@v4
         with:
@@ -24,10 +28,13 @@ jobs:
         with:
           node-version: "18"
 
-      - name: Run script
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Run image sender
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-        run: node sunset.js
+        run: node image_post.js
 
       - name: Save send cache
         if: always()
