@@ -133,7 +133,7 @@ function renderCard({ hhmm }){
   // Подзаголовок (PT Sans)
   ctx.font = '400 36px "PT Sans"';
   ctx.fillStyle = chocSoft;
-  ctx.fillText('Встреча субботы (за час до заката)', W/2, pad+190);
+  ctx.fillText('Удачи в подготовке, встреча субботы в:', W/2, pad+190);
 
   // Время — цифры PT Sans (лучше читаются)
   ctx.font = '700 200px "PT Sans"';
