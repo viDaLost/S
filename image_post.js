@@ -1,5 +1,5 @@
-// image_post.js — генерирует PNG-карточку (кириллица) и отправляет как фото БЕЗ подписи
-// BOT_TOKEN — GitHub Secret; нужны: channels.json и шрифты в assets/fonts/
+// image_post.js — PNG-карточка (тёплый бежевый фон, шоколадный текст), БЕЗ подписи
+// Требует: BOT_TOKEN (secret), channels.json, шрифты в assets/fonts/
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,7 @@ if (!BOT_TOKEN) { console.error('No BOT_TOKEN'); process.exit(1); }
 const ROOT = process.cwd();
 const channels = JSON.parse(fs.readFileSync(path.join(ROOT, 'channels.json'), 'utf8'));
 
-// Шрифты: Manrope (заголовок/время), PT Sans (подзаголовок)
+// Шрифты (КИРИЛЛИЦА)
 registerFont(path.join(ROOT, 'assets/fonts/Manrope-Regular.ttf'), { family: 'Manrope', weight: '400' });
 registerFont(path.join(ROOT, 'assets/fonts/Manrope-Bold.ttf'),    { family: 'Manrope', weight: '700' });
 registerFont(path.join(ROOT, 'assets/fonts/PTSans-Regular.ttf'),  { family: 'PT Sans', weight: '400' });
@@ -22,7 +22,7 @@ const CACHE_FILE = path.join(ROOT, '.cache.json');
 let cache = {};
 try { cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); } catch { cache = {}; }
 
-// ── Астрономия: вычисление времени заката (UTC)
+// ── Астрономия: закат (UTC)
 const PI = Math.PI, rad = PI/180;
 function toJulian(date){ return date/86400000 - 0.5 + 2440587.5; }
 function fromJulian(j){ return new Date((j + 0.5 - 2440587.5)*86400000); }
@@ -47,56 +47,74 @@ function getSunset(dateUTC, lat, lon){
   const H = hourAngle(h0, phi, dec);
   const ds = approxTransit(H, lw, n);
   const Jset = solarTransitJ(ds, M, L);
-  return fromJulian(Jset); // === закат в UTC (Date)
+  return fromJulian(Jset); // sunset in UTC
 }
 
-// ── Вспомогательные: работаем с ЛОКАЛЬНЫМ временем ЧЕРЕЗ Intl (без лишних Date-конвертаций)
-function localParts(dateUTC, tz){
-  // Возвращаем объект {year, month, day, hour, minute, second} в указанном TZ
+// ── Работаем строго в указанном TZ (никаких «утеканий» в UTC по умолчанию)
+function fmtParts(dateUTC, tz){
   const parts = new Intl.DateTimeFormat('ru-RU', {
-    timeZone: tz, hour12: false,
+    timeZone: tz, hour12:false,
     year:'numeric', month:'2-digit', day:'2-digit',
-    hour:'2-digit', minute:'2-digit', second:'2-digit'
+    hour:'2-digit', minute:'2-digit', second:'2-digit', weekday:'short'
   }).formatToParts(dateUTC);
-  const get = t => parts.find(p => p.type === t).value;
+  const get = t => (parts.find(p => p.type === t) || { value: '' }).value;
   return {
-    year: +get('year'),
-    month: +get('month'),
-    day: +get('day'),
-    hour: +get('hour'),
-    minute: +get('minute'),
-    second: +get('second')
+    year:+get('year'), month:+get('month'), day:+get('day'),
+    hour:+get('hour'), minute:+get('minute'), second:+get('second'),
+    weekday:get('weekday') // напр. "сб"
   };
 }
-function hhmmMinus60FromUTC(dateUTC, tz){
-  // Возьмём локальные ЧАС и МИНУТЫ для dateUTC, отнимем 60 минут, вернём строку HH:MM.
-  const p = localParts(dateUTC, tz);
-  let total = p.hour * 60 + p.minute - 60;
-  total = (total % (24*60) + (24*60)) % (24*60); // нормализуем в 0..1439
-  const hh = String(Math.floor(total/60)).padStart(2,'0');
-  const mm = String(total % 60).padStart(2,'0');
+
+const WEEKIDX = { 'вс':0,'пн':1,'вт':2,'ср':3,'чт':4,'пт':5,'сб':6 };
+function weekdayIndex(dateUTC, tz){
+  const w = fmtParts(dateUTC, tz).weekday.toLowerCase().slice(0,2);
+  return WEEKIDX[w];
+}
+
+// находим ближайшую СУББОТУ (в TZ) начиная с «сейчас»
+function nextSaturdayNoonUTC(nowUTC, tz){
+  // стартуем с сегодняшнего полдня по UTC (стабильная точка) и шагаем по дням,
+  // пока в TZ не станет суббота
+  let d = new Date(Date.UTC(nowUTC.getUTCFullYear(), nowUTC.getUTCMonth(), nowUTC.getUTCDate(), 12, 0, 0));
+  while (weekdayIndex(d, tz) !== 6) d = new Date(d.getTime() + 24*60*60*1000);
+  return d; // полдень UTC субботы с точки зрения указанного TZ
+}
+
+// «закат минус 60 минут» в формате HH:MM именно в указанном TZ
+function sunsetMinus1HHMM(tz, lat, lon){
+  const nowUTC = new Date();
+  const saturdayUTC = nextSaturdayNoonUTC(nowUTC, tz);
+  const sunsetUTC = getSunset(saturdayUTC, lat, lon);
+
+  const p = fmtParts(sunsetUTC, tz); // локальные часы заката
+  let minutes = p.hour*60 + p.minute - 60;
+  minutes = (minutes % (24*60) + 24*60) % (24*60);
+  const hh = String(Math.floor(minutes/60)).padStart(2,'0');
+  const mm = String(minutes % 60).padStart(2,'0');
   return `${hh}:${mm}`;
 }
 
+// расписание: проверяем «окно» 15 минут в локальном TZ
 const DOW = { SUN:0, MON:1, TUE:2, WED:3, THU:4, FRI:5, SAT:6 };
 function shouldSendNow(tz, schedule, lastSentMs, nowUTC){
-  const nowP = localParts(nowUTC, tz);
   const [dayStr, hm] = schedule.split(' ');
   const [th, tm] = hm.split(':').map(Number);
   const target = DOW[dayStr];
-  const nowMin = nowP.hour*60 + nowP.minute + nowP.day*0; // только время; день сравним через getDay
-  // Для стабильности используем прежнюю логику по дням:
-  const localDate = new Date(`${nowP.year}-${String(nowP.month).padStart(2,'0')}-${String(nowP.day).padStart(2,'0')}T${String(nowP.hour).padStart(2,'0')}:${String(nowP.minute).padStart(2,'0')}:00`);
-  const localDay = localDate.getDay(); // 0..6 в локали агента, но нам важен только порядок
+
+  // текущий локальный день/время
+  const p = fmtParts(nowUTC, tz);
+  const localDay = weekdayIndex(nowUTC, tz);
+  const nowMin = p.hour*60 + p.minute;
   const schedMin = th*60 + tm;
-  let diffMin = (localDay === target) ? (nowMin - schedMin) : ((localDay + 7 - target)%7)*1440 + (nowMin - schedMin);
-  if (diffMin < 0) diffMin += 7*1440;
-  const WINDOW = 15;
+
+  let diff = (localDay - target)*1440 + (nowMin - schedMin);
+  diff = ((diff % (7*1440)) + 7*1440) % (7*1440); // 0..10079
+  const WINDOW = 15; // мин.
   const antiDup = !lastSentMs || (Date.now() - lastSentMs) > 12*60*60*1000;
-  return diffMin < WINDOW && antiDup;
+  return diff < WINDOW && antiDup;
 }
 
-// ── Генерация изображения (тёплый бежевый фон, шоколадный текст)
+// ── Рендер (тёплый бежевый фон, шоколадный текст), без нижней подписи
 function renderCard({ hhmm }){
   const W = 1080, H = 1350;
   const canvas = createCanvas(W, H);
@@ -104,36 +122,35 @@ function renderCard({ hhmm }){
 
   // Тёплый бежевый градиент
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#F5EFE6'); // светлый бежевый
+  g.addColorStop(0, '#F5EFE6'); // светлый беж
   g.addColorStop(1, '#EADCCF'); // чуть темнее
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
 
-  // «карточка» чуть темнее бежевого
+  // Мягкая карточка
   const pad = 56, r = 36;
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillStyle = 'rgba(255,255,255,0.60)';
   roundRect(ctx, pad, pad, W-2*pad, H-2*pad, r); ctx.fill();
 
   // Цвета «шоколад»
-  const choc = '#4A2E1A';        // тёмный шоколад для времени/заголовка
-  const chocSoft = '#6B3F23';     // мягкий шоколад для подзаголовка
+  const choc = '#4A2E1A';    // основной
+  const chocSoft = '#6B3F23'; // дополнительный
 
   // Заголовок
   ctx.fillStyle = choc;
   ctx.font = '700 64px "Manrope"';
   ctx.textAlign = 'center';
-  ctx.fillText('Доброе утро', W/2, pad+130);
+  ctx.fillText('Доброе утро и удачи в подготовке', W/2, pad+130);
 
   // Подзаголовок
   ctx.font = '400 36px "PT Sans"';
   ctx.fillStyle = chocSoft;
-  ctx.fillText('Встреча субботы (за час до заката)', W/2, pad+190);
+  ctx.fillText('Встреча субботы в:', W/2, pad+190);
 
   // Большое время
   ctx.font = '700 200px "Manrope"';
   ctx.fillStyle = choc;
   ctx.fillText(hhmm, W/2, H/2+40);
 
-  // без нижней подписи
   return canvas.toBuffer('image/png');
 }
 
@@ -148,11 +165,12 @@ function roundRect(ctx, x,y,w,h,r){
   ctx.closePath();
 }
 
+// Отправка фото БЕЗ caption
 async function sendPhoto(chat_id, pngBuffer){
   const form = new FormData();
   const file = new Blob([pngBuffer], { type: 'image/png' });
   form.append('chat_id', chat_id);
-  form.append('photo', file, 'meeting.png'); // без caption
+  form.append('photo', file, 'meeting.png');
   const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, { method:'POST', body: form });
   if (!res.ok) throw new Error(`sendPhoto ${res.status}`);
   return res.json();
@@ -161,17 +179,12 @@ async function sendPhoto(chat_id, pngBuffer){
 (async ()=>{
   const nowUTC = new Date();
   for (const rule of channels){
-    const uid = `${rule.chat_id}::${rule.tz}::${rule.schedule}`;
+    const tz = rule.tz || 'Europe/Moscow'; // надёжный дефолт
+    const uid = `${rule.chat_id}::${tz}::${rule.schedule}`;
     const last = cache[uid] ? Number(cache[uid]) : 0;
-    if (!shouldSendNow(rule.tz, rule.schedule, last, nowUTC)) continue;
+    if (!shouldSendNow(tz, rule.schedule, last, nowUTC)) continue;
 
-    // Считаем закат субботы (UTC) и получаем локальное HH:MM минус 60 минут
-    const localNowParts = localParts(nowUTC, rule.tz);
-    const daysUntilSat = (6 - new Date(`${localNowParts.year}-${String(localNowParts.month).padStart(2,'0')}-${String(localNowParts.day).padStart(2,'0')}T00:00:00`).getDay() + 7) % 7;
-    const saturdayUTC = new Date(Date.UTC(nowUTC.getUTCFullYear(), nowUTC.getUTCMonth(), nowUTC.getUTCDate()+daysUntilSat, 12, 0, 0));
-    const sunsetUTC = getSunset(saturdayUTC, rule.lat, rule.lon);
-
-    const hhmm = hhmmMinus60FromUTC(sunsetUTC, rule.tz);
+    const hhmm = sunsetMinus1HHMM(tz, rule.lat, rule.lon);
     const png = renderCard({ hhmm });
 
     try{
