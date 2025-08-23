@@ -1,4 +1,6 @@
-// image_post.js — генерирует PNG-карточку (кириллица), отправляет как фото БЕЗ подписи
+// image_post.js — генерирует PNG-карточку (кириллица) и отправляет как фото БЕЗ подписи
+// Требует: BOT_TOKEN (GitHub Secret), channels.json, шрифты в assets/fonts/
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { createCanvas, registerFont } from 'canvas';
@@ -9,8 +11,7 @@ if (!BOT_TOKEN) { console.error('No BOT_TOKEN'); process.exit(1); }
 const ROOT = process.cwd();
 const channels = JSON.parse(fs.readFileSync(path.join(ROOT, 'channels.json'), 'utf8'));
 
-// ── Регистрируем хорошие кириллические шрифты:
-// Manrope — для заголовков и времени, PT Sans — для вспомогательного текста
+// ── Шрифты (Manrope для заголовков/времени, PT Sans для вспомогательного текста)
 registerFont(path.join(ROOT, 'assets/fonts/Manrope-Regular.ttf'), { family: 'Manrope', weight: '400' });
 registerFont(path.join(ROOT, 'assets/fonts/Manrope-Bold.ttf'),    { family: 'Manrope', weight: '700' });
 registerFont(path.join(ROOT, 'assets/fonts/PTSans-Regular.ttf'),  { family: 'PT Sans', weight: '400' });
@@ -52,20 +53,30 @@ function getSunset(dateUTC, lat, lon){
 
 // ── TZ и расписание
 const DOW = { SUN:0, MON:1, TUE:2, WED:3, THU:4, FRI:5, SAT:6 };
-function toZoned(dateUTC, tz){
-  const s = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12:false,
-    year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'
-  }).format(dateUTC);
-  const m = s.match(/(\d{2})\/(\d{2})\/(\d{4}), (\d{2}):(\d{2}):(\d{2})/);
-  return new Date(`${m[3]}-${m[1]}-${m[2]}T${m[4]}:${m[5]}:${m[6]}`);
+
+// ВАЖНО: корректная конвертация в указанный TZ (чтобы было 18:37, а не 06:37)
+function toZoned(dateUTC, tz) {
+  const parts = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: tz,
+    hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  }).formatToParts(dateUTC);
+  const get = (t) => parts.find(p => p.type === t).value;
+  return new Date(`${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`);
 }
-function fmtHHMM(d){ return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; }
+
+function fmtHHMM(d){
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
 
 function buildSaturdayMinus1(tz, lat, lon){
   const nowUTC = new Date();
   const local = toZoned(nowUTC, tz);
   const daysUntilSat = (6 - local.getDay() + 7) % 7; // 6 = Saturday
-  const saturdayUTC = new Date(Date.UTC(nowUTC.getUTCFullYear(), nowUTC.getUTCMonth(), nowUTC.getUTCDate()+daysUntilSat, 12, 0, 0));
+  const saturdayUTC = new Date(Date.UTC(
+    nowUTC.getUTCFullYear(), nowUTC.getUTCMonth(), nowUTC.getUTCDate()+daysUntilSat, 12, 0, 0
+  ));
   const sunsetUTC = getSunset(saturdayUTC, lat, lon);
   const localSunset = toZoned(sunsetUTC, tz);
   const meetLocal = new Date(localSunset.getTime() - 60*60*1000);
@@ -85,8 +96,8 @@ function shouldSendNow(tz, schedule, lastSentMs, nowUTC){
   return diff < WINDOW && antiDup;
 }
 
-// ── Рендер PNG (1080x1350) с Manrope + PT Sans
-function renderCard({ hhmm, tzText = 'Europe/Moscow', place = 'Ставропольский край' }){
+// ── Рендер PNG (1080x1350), БЕЗ нижней подписи
+function renderCard({ hhmm }){
   const W = 1080, H = 1350;
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
@@ -102,29 +113,25 @@ function renderCard({ hhmm, tzText = 'Europe/Moscow', place = 'Ставропо�
   ctx.fillStyle = 'rgba(255,255,255,0.06)';
   roundRect(ctx, pad, pad, W-2*pad, H-2*pad, r); ctx.fill();
 
-  // заголовок (Manrope Bold)
+  // заголовок
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.font = '700 64px "Manrope"';
   ctx.textAlign = 'center';
   ctx.fillText('Доброе утро', W/2, pad+130);
 
-  // подзаголовок (PT Sans Regular)
+  // подзаголовок
   ctx.font = '400 36px "PT Sans"';
   ctx.fillStyle = 'rgba(255,255,255,0.78)';
   ctx.fillText('Встреча субботы (за час до заката)', W/2, pad+190);
 
-  // крупное время (Manrope Bold)
+  // крупное время
   ctx.font = '700 200px "Manrope"';
   ctx.fillStyle = 'rgba(255,255,255,1)';
   ctx.fillText(hhmm, W/2, H/2+40);
 
-  // нижняя строка (PT Sans Regular)
-  ctx.font = '400 36px "PT Sans"';
-  ctx.fillStyle = 'rgba(255,255,255,0.8)';
-  ctx.fillText(`${place} • ${tzText}`, W/2, H - pad - 60);
-
   return canvas.toBuffer('image/png');
 }
+
 function roundRect(ctx, x,y,w,h,r){
   const rr = Math.min(r, w/2, h/2);
   ctx.beginPath();
@@ -159,11 +166,7 @@ async function sendPhoto(chat_id, pngBuffer){
     if (!shouldSendNow(rule.tz, rule.schedule, last, nowUTC)) continue;
 
     const { hhmm } = buildSaturdayMinus1(rule.tz, rule.lat, rule.lon);
-    const png = renderCard({
-      hhmm,
-      tzText: rule.tz || 'Europe/Moscow',
-      place: rule.place || 'Ставропольский край'
-    });
+    const png = renderCard({ hhmm });
 
     try{
       await sendPhoto(rule.chat_id, png);
