@@ -1,5 +1,5 @@
 // image_post.js — PNG (тёплый беж, шоколадный текст), БЕЗ подписи
-// Надёжная конвертация времени для Europe/Moscow (UTC+3) без Intl.
+// Московское время считаем как: local = UTC + 3ч; "закат − 1ч" = UTC + 2ч.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,56 +42,40 @@ function getSunset(dateUTC, lat, lon){
   const H = hourAngle(h0, phi, dec);
   const ds = approxTransit(H, lw, n);
   const Jset = solarTransitJ(ds, M, L);
-  return fromJulian(Jset); // sunset in UTC
+  return fromJulian(Jset); // sunset in UTC (Date)
 }
 
-// ── Жёсткая карта смещений (минуты) — пока нужна только Москва
-const FIXED_OFFSETS_MIN = {
-  'Europe/Moscow': 180, // UTC+3, круглый год
-};
+// ── Ближайшая суббота (полдень UTC). Хватает для MSK (без переходов).
+function nextSaturdayNoonUTC(nowUTC){
+  const base = new Date(Date.UTC(nowUTC.getUTCFullYear(), nowUTC.getUTCMonth(), nowUTC.getUTCDate(), 12, 0, 0));
+  const dow = base.getUTCDay();                   // 0..6
+  const days = (6 - dow + 7) % 7;                 // до субботы по UTC
+  return new Date(base.getTime() + days*86400000);
+}
 
-// HH:MM для UTC-даты в TZ с фиксированным смещением
-function hhmmFixedTZ(dateUTC, tz){
-  const offset = FIXED_OFFSETS_MIN[tz];
-  if (offset == null) {
-    // запасной вариант: если когда-то появится другой TZ — покажем UTC
-    const hh = String(dateUTC.getUTCHours()).padStart(2,'0');
-    const mm = String(dateUTC.getUTCMinutes()).padStart(2,'0');
-    return `${hh}:${mm}`;
-  }
-  const ms = dateUTC.getTime() + offset*60*1000;
-  const d = new Date(ms);
-  const hh = String(d.getUTCHours()).padStart(2,'0');   // используем UTC-поля после сдвига
-  const mm = String(d.getUTCMinutes()).padStart(2,'0'); // чтобы не зависеть от локали раннера
+// ── Формат HH:MM после добавления смещения в МИЛЛИСЕКУНДАХ и чтения UTC-полей
+function hhmmFromUTCWithOffset(dateUTC, offsetMs){
+  const d = new Date(dateUTC.getTime() + offsetMs);
+  const hh = String(d.getUTCHours()).padStart(2,'0');
+  const mm = String(d.getUTCMinutes()).padStart(2,'0');
   return `${hh}:${mm}`;
 }
 
-// Закат субботы − 60 минут → HH:MM в Europe/Moscow
+// ── Итог: (закат UTC) + (UTC+3) − (1ч) = UTC + 2ч → HH:MM
 function sunsetMinus1HHMM_MSK(lat, lon){
-  const nowUTC = new Date();
-
-  // найдём ближайшую субботу с точки зрения Москвы: просто берём нынешний день UTC
-  // и прибавляем нужное число дней до субботы. Из-за фикс. UTC+3 этого достаточно.
-  const dowUTC = nowUTC.getUTCDay();         // 0..6
-  const daysUntilSat = (6 - dowUTC + 7) % 7; // суббота относительно UTC
-  const saturdayUTC = new Date(Date.UTC(
-    nowUTC.getUTCFullYear(), nowUTC.getUTCMonth(), nowUTC.getUTCDate() + daysUntilSat, 12, 0, 0
-  ));
-
+  const saturdayUTC = nextSaturdayNoonUTC(new Date());
   const sunsetUTC = getSunset(saturdayUTC, lat, lon);
-  const minus1UTC = new Date(sunsetUTC.getTime() - 60*60000);
-  return hhmmFixedTZ(minus1UTC, 'Europe/Moscow');
+  // Для Москвы: UTC + 2 часа (3 часа до локального времени и минус 1 час)
+  return hhmmFromUTCWithOffset(sunsetUTC, 2*60*60*1000);
 }
 
-// ── Расписание: окно 15 минут (в Москве)
+// ── Расписание (окно 15 минут) — считаем «виртуальную Москву» как UTC+3
 const DOW = { SUN:0, MON:1, TUE:2, WED:3, THU:4, FRI:5, SAT:6 };
 function shouldSendNow_MSK(schedule, lastSentMs){
-  const now = new Date(); // работаем от UTC, но сравнение будем делать в "виртуальной Москве"
-  const offsetMin = FIXED_OFFSETS_MIN['Europe/Moscow'];
-  const ms = now.getTime() + offsetMin*60*1000;
-  const d = new Date(ms);
-  const localDay = d.getUTCDay();
-  const hh = d.getUTCHours(), mm = d.getUTCMinutes();
+  const now = new Date();
+  const msk = new Date(now.getTime() + 3*60*60*1000); // виртуальное MSK
+  const localDay = msk.getUTCDay();
+  const hh = msk.getUTCHours(), mm = msk.getUTCMinutes();
 
   const [dayStr, hm] = schedule.split(' ');
   const [th, tm] = hm.split(':').map(Number);
@@ -113,13 +97,12 @@ function renderCard({ hhmm }){
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
 
-  // тёплый бежевый градиент
+  // Тёплый бежевый
   const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, '#F5EFE6');
   g.addColorStop(1, '#EADCCF');
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
 
-  // мягкая карточка
   const pad = 56, r = 36;
   ctx.fillStyle = 'rgba(255,255,255,0.60)';
   roundRect(ctx, pad, pad, W-2*pad, H-2*pad, r); ctx.fill();
@@ -153,7 +136,7 @@ function roundRect(ctx, x,y,w,h,r){
   ctx.closePath();
 }
 
-// отправка фото БЕЗ caption
+// Отправка фото БЕЗ caption
 async function sendPhoto(chat_id, pngBuffer){
   const form = new FormData();
   const file = new Blob([pngBuffer], { type: 'image/png' });
@@ -164,31 +147,28 @@ async function sendPhoto(chat_id, pngBuffer){
   return res.json();
 }
 
-// ── Антидубль (кэш)
+// ── Антидубль
 const CACHE_FILE = path.join(ROOT, '.cache.json');
 let cache = {};
 try { cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); } catch { cache = {}; }
 
 (async ()=>{
-  const nowUTC = new Date();
   for (const rule of channels){
-    // мы поддерживаем пока только Europe/Moscow (ваш случай)
-    const tz = (rule.tz || 'Europe/Moscow');
+    // Поддерживаем только Europe/Moscow — это ваш случай
+    if ((rule.tz || 'Europe/Moscow') !== 'Europe/Moscow') continue;
 
-    const uid = `${rule.chat_id}::${tz}::${rule.schedule}`;
+    const uid = `${rule.chat_id}::Europe/Moscow::${rule.schedule}`;
     const last = cache[uid] ? Number(cache[uid]) : 0;
-
-    // сравнение времени — тоже в MSK
-    if (tz !== 'Europe/Moscow' || !shouldSendNow_MSK(rule.schedule, last)) continue;
+    if (!shouldSendNow_MSK(rule.schedule, last)) continue;
 
     const hhmm = sunsetMinus1HHMM_MSK(rule.lat, rule.lon);
     const png = renderCard({ hhmm });
 
-    try {
+    try{
       await sendPhoto(rule.chat_id, png);
       console.log('Photo sent to', rule.chat_id, hhmm);
       cache[uid] = String(Date.now());
-    } catch(e) {
+    }catch(e){
       console.error('Send error', rule.chat_id, e.message);
     }
   }
