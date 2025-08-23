@@ -4,16 +4,7 @@
     "tz": "Europe/Moscow",
     "lat": 45.0428,
     "lon": 41.9734,
-    "schedule": "SAT 13:00",
-    "text": "Доброе утро, встреча субботы в {HHMM} (MSK), удачи в подготовке!"
-  },
-
-  {
-    "chat_id": "@my_public_channel",
-    "tz": "Europe/Moscow",
-    "lat": 45.0428,
-    "lon": 41.9734,
-    "schedule": "FRI 09:30",
-    "text": "Доброе утро! Встреча в {HHMM} (закат−1ч)."
+    "schedule": "SAT 12:55",
+    "place": "Ставропольский край"
   }
 ]
