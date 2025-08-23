@@ -1,0 +1,8 @@
+node_modules/
+npm-debug.log
+yarn-error.log
+.cache.json
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
