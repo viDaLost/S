@@ -1,7 +1,5 @@
 // image_post.js — PNG (тёплый беж, «шоколадный» текст), БЕЗ подписи.
-// Локальное время считаем по фиксированному сдвигу offset_minutes (для Ставрополья: +180).
-// Формула: local = UTC + offset; "закат − 1ч" = sunsetUTC + (offset_minutes − 60) минут.
-// Никакого Intl — только UTC-математика (стабильно на GitHub Actions).
+// Регион: Ставропольский край (UTC+3). Всегда показываем ВЕЧЕРНЕЕ время (если <12ч → +12ч).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,12 +42,10 @@ function getSunset(dateUTC, lat, lon){
   const H = hourAngle(h0, phi, dec);
   const ds = approxTransit(H, lw, n);
   const Jset = solarTransitJ(ds, M, L);
-  return fromJulian(Jset); // sunset in UTC (Date)
+  return fromJulian(Jset); // закат в UTC (Date)
 }
 
-// ───────── Время: вычисляем в «локали по смещению» (offset_minutes) ─────────
-// Находим ближайшую субботу с точки зрения локального смещения (offset),
-// берём полдень той субботы в UTC (стабильная точка внутри суток).
+// ───────── Локальная «суббота» и локальное время по фикс. смещению ─────────
 function nextLocalSaturdayNoonUTC(nowUTC, offsetMinutes){
   const offsetMs = offsetMinutes*60*1000;
   const localNow = new Date(nowUTC.getTime() + offsetMs);      // UTC → local
@@ -61,8 +57,6 @@ function nextLocalSaturdayNoonUTC(nowUTC, offsetMinutes){
   const localSatNoon = new Date(Date.UTC(y, m, d, 12, 0, 0));  // 12:00 локальных суток
   return new Date(localSatNoon.getTime() - offsetMs);          // обратно в UTC
 }
-
-// Формируем "HH:MM" строго через UTC-поля после добавления смещения
 function hhmmFromUTCWithOffset(dateUTC, offsetMinutes){
   const d = new Date(dateUTC.getTime() + offsetMinutes*60*1000);
   const hh = String(d.getUTCHours()).padStart(2, '0');
@@ -70,15 +64,25 @@ function hhmmFromUTCWithOffset(dateUTC, offsetMinutes){
   return `${hh}:${mm}`;
 }
 
-// Закат субботы − 1 час → HH:MM в локальном времени (offset_minutes)
+// «Закат − 1 час» → HH:MM (локально, по смещению). Всегда делаем вечер.
 function sunsetMinus1HHMM_Local(lat, lon, offsetMinutes){
   const saturdayUTC = nextLocalSaturdayNoonUTC(new Date(), offsetMinutes);
   const sunsetUTC   = getSunset(saturdayUTC, lat, lon);
   const localMinus1 = new Date(sunsetUTC.getTime() + (offsetMinutes - 60)*60*1000);
-  return hhmmFromUTCWithOffset(localMinus1, 0); // уже учли смещение в localMinus1
+
+  // Часы/минуты через UTC-поля (уже сдвинутая дата):
+  let h = localMinus1.getUTCHours();
+  let m = localMinus1.getUTCMinutes();
+
+  // ГАРАНТИЯ ВЕЧЕРА: если по какой-то причине получилось < 12 часов — добавим 12.
+  if (h < 12) h += 12;
+
+  const hh = (h < 10 ? '0' : '') + h;
+  const mm = (m < 10 ? '0' : '') + m;
+  return hh + ':' + mm; // например, "18:08"
 }
 
-// ───────── Расписание: окно 15 минут (в локальном смещении) ─────────
+// ───────── Расписание (окно 15 минут) в локальном смещении ─────────
 const DOW = { SUN:0, MON:1, TUE:2, WED:3, THU:4, FRI:5, SAT:6 };
 function shouldSendNow_Local(schedule, lastSentMs, offsetMinutes){
   const now = new Date();
@@ -117,22 +121,22 @@ function renderCard({ hhmm }){
   ctx.fillStyle = 'rgba(255,255,255,0.60)';
   roundRect(ctx, pad, pad, W-2*pad, H-2*pad, r); ctx.fill();
 
-  const choc = '#4A2E1A';    // основной «шоколад»
-  const chocSoft = '#6B3F23'; // дополнительный
+  const choc = '#4A2E1A';
+  const chocSoft = '#6B3F23';
 
-  // Заголовок
+  // Заголовок (Manrope)
   ctx.fillStyle = choc;
   ctx.font = '700 64px "Manrope"';
   ctx.textAlign = 'center';
   ctx.fillText('Доброе утро', W/2, pad+130);
 
-  // Подзаголовок
+  // Подзаголовок (PT Sans)
   ctx.font = '400 36px "PT Sans"';
   ctx.fillStyle = chocSoft;
   ctx.fillText('Встреча субботы (за час до заката)', W/2, pad+190);
 
-  // Большое время
-  ctx.font = '700 200px "Manrope"';
+  // Время — цифры PT Sans (лучше читаются)
+  ctx.font = '700 200px "PT Sans"';
   ctx.fillStyle = choc;
   ctx.fillText(hhmm, W/2, H/2+40);
 
@@ -168,7 +172,7 @@ try { cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); } catch { cache =
 // ───────── MAIN ─────────
 (async ()=>{
   for (const rule of channels){
-    // offset_minutes: локальное смещение в минутах (Ставропольский край = 180)
+    // Для Ставропольского края задаём смещение 180 минут (UTC+3)
     const offset = Number.isFinite(rule.offset_minutes) ? rule.offset_minutes : 180;
 
     const uid = `${rule.chat_id}::offset${offset}::${rule.schedule}`;
