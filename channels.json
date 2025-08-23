@@ -1,10 +1,9 @@
 [
   {
     "chat_id": "-1001848317777",
-    "tz": "Europe/Moscow",
     "lat": 45.0428,
     "lon": 41.9734,
-    "schedule": "SAT 15:07",
-    "place": "Ставропольский край"
+    "offset_minutes": 180,
+    "schedule": "SAT 15:18"
   }
 ]
